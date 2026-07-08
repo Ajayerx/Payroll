@@ -22,6 +22,8 @@ public class PayrollDbContext : DbContext
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
+    public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<EmployeeDocument> EmployeeDocuments => Set<EmployeeDocument>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -44,6 +46,7 @@ public class PayrollDbContext : DbContext
             e.Property(u => u.FirstName).HasMaxLength(100);
             e.Property(u => u.LastName).HasMaxLength(100);
             e.Property(u => u.Role).HasConversion<string>().HasMaxLength(50);
+            e.Property(u => u.ResetToken).HasMaxLength(500);
         });
 
         modelBuilder.Entity<Employee>(e =>
@@ -196,5 +199,17 @@ public class PayrollDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<Notification>(e =>
+        {
+            e.HasIndex(n => n.UserId);
+            e.HasIndex(n => new { n.UserId, n.IsRead });
+            e.Property(n => n.Title).HasMaxLength(200).IsRequired();
+            e.Property(n => n.Message).HasMaxLength(1000).IsRequired();
+
+            e.HasOne(n => n.User)
+                .WithMany()
+                .HasForeignKey(n => n.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }

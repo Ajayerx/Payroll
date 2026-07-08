@@ -128,6 +128,15 @@ export const Login = () => {
             </Button>
           </form>
 
+          <Box sx={{ textAlign: 'center', mt: 1 }}>
+            <Typography variant="body2">
+              <a href="/forgot-password" style={{ color: 'inherit', textDecoration: 'none' }}
+                onClick={(e) => { e.preventDefault(); navigate('/forgot-password'); }}>
+                Forgot Password?
+              </a>
+            </Typography>
+          </Box>
+
           <Divider sx={{ my: 2 }} />
 
           <Box sx={{ textAlign: 'center' }}>

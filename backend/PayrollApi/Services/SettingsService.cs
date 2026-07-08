@@ -1,18 +1,32 @@
 using Microsoft.EntityFrameworkCore;
+using PayrollApi.Constants;
 using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Models.Entities;
+using PayrollApi.Services.Interfaces;
 
 namespace PayrollApi.Services;
 
 public class SettingsService : ISettingsService
 {
     private readonly PayrollDbContext _context;
+    private readonly IAuditService _auditService;
+    private readonly ILookupCacheService _lookupCache;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public SettingsService(PayrollDbContext context)
+    public SettingsService(PayrollDbContext context, IAuditService auditService, ILookupCacheService lookupCache, IHttpContextAccessor httpContextAccessor)
     {
         _context = context;
+        _auditService = auditService;
+        _lookupCache = lookupCache;
+        _httpContextAccessor = httpContextAccessor;
     }
+
+    private Guid CurrentUserId =>
+        Guid.TryParse(_httpContextAccessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+
+    private string? CurrentUserIp =>
+        _httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
 
     public async Task<CompanySettingDto> GetCompanyAsync()
     {
@@ -56,6 +70,8 @@ public class SettingsService : ISettingsService
         setting.UpdatedDate = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
+        await _auditService.LogAsync(EntityNames.CompanySetting, setting.Id.ToString(), "Update", null, request, CurrentUserId, CurrentUserIp);
+
         return await GetCompanyAsync();
     }
 
@@ -88,6 +104,8 @@ public class SettingsService : ISettingsService
 
         _context.TaxSlabs.Add(slab);
         await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("TaxSlab", slab.Id.ToString(), "Create", null, new { slab.Name, slab.FromAmount, slab.ToAmount, slab.Rate }, CurrentUserId, CurrentUserIp);
 
         return new TaxSlabDto
         {
@@ -126,6 +144,9 @@ public class SettingsService : ISettingsService
 
         _context.LeaveTypes.Add(leaveType);
         await _context.SaveChangesAsync();
+
+        await _lookupCache.InvalidateLeaveTypesAsync();
+        await _auditService.LogAsync(EntityNames.LeaveRequest, leaveType.Id.ToString(), "Create", null, new { leaveType.Name, leaveType.DaysPerYear, leaveType.IsPaid }, CurrentUserId, CurrentUserIp);
 
         return new LeaveTypeDto
         {

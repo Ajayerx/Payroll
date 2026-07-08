@@ -20,4 +20,8 @@ export const payrollService = {
   exportCsv: (params) => api.get('/payroll/export/csv', { params, responseType: 'blob' }),
 
   exportPdf: (id) => api.get(`/payroll/${id}/export/pdf`, { responseType: 'blob' }),
+
+  generateSlipById: (id) => api.post(`/payroll/${id}/generate-slip`),
+
+  delete: (id) => api.delete(`/payroll/${id}`),
 };

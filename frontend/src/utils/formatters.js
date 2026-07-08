@@ -37,3 +37,17 @@ export const capitalize = (str) => {
   if (!str) return '';
   return str.charAt(0).toUpperCase() + str.slice(1);
 };
+
+export const formatRelativeTime = (date) => {
+  if (!date) return '';
+  const now = dayjs();
+  const d = dayjs(date);
+  const diffMin = now.diff(d, 'minute');
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = now.diff(d, 'hour');
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = now.diff(d, 'day');
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return d.format('DD-MMM-YYYY');
+};

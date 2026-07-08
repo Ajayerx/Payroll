@@ -65,3 +65,19 @@ public class CreateDeductionRequest
     public DateTime StartDate { get; set; }
     public DateTime? EndDate { get; set; }
 }
+
+public class TaxConfigurationDto
+{
+    public Guid Id { get; set; }
+    public Guid EmployeeId { get; set; }
+    public string TaxSlab { get; set; } = string.Empty;
+    public decimal TaxRate { get; set; }
+    public DateTime EffectiveDate { get; set; }
+}
+
+public class CreateTaxConfigurationRequest
+{
+    public string TaxSlab { get; set; } = string.Empty;
+    public decimal TaxRate { get; set; }
+    public DateTime EffectiveDate { get; set; }
+}

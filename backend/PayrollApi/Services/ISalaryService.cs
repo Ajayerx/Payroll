@@ -11,4 +11,6 @@ public interface ISalaryService
     Task UpdateEmployeeStructureAsync(Guid employeeId, UpdateSalaryStructureRequest request);
     Task<List<DeductionDto>> GetEmployeeDeductionsAsync(Guid employeeId);
     Task<DeductionDto> AddEmployeeDeductionAsync(Guid employeeId, CreateDeductionRequest request);
+    Task<DeductionDto> UpdateEmployeeDeductionAsync(Guid employeeId, Guid deductionId, CreateDeductionRequest request);
+    Task DeleteEmployeeDeductionAsync(Guid employeeId, Guid deductionId);
 }

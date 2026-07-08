@@ -17,6 +17,8 @@ public class User
     public Guid? UpdatedBy { get; set; }
     public DateTime? UpdatedDate { get; set; }
     public DateTime? LastLoginAt { get; set; }
+    public string? ResetToken { get; set; }
+    public DateTime? ResetTokenExpiry { get; set; }
 
     public Employee? Employee { get; set; }
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();

@@ -1,19 +1,33 @@
 using Microsoft.EntityFrameworkCore;
+using PayrollApi.Constants;
 using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Models.Entities;
 using PayrollApi.Models.Enums;
+using PayrollApi.Services.Interfaces;
 
 namespace PayrollApi.Services;
 
 public class SalaryService : ISalaryService
 {
     private readonly PayrollDbContext _context;
+    private readonly IAuditService _auditService;
+    private readonly ILookupCacheService _lookupCache;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public SalaryService(PayrollDbContext context)
+    public SalaryService(PayrollDbContext context, IAuditService auditService, ILookupCacheService lookupCache, IHttpContextAccessor httpContextAccessor)
     {
         _context = context;
+        _auditService = auditService;
+        _lookupCache = lookupCache;
+        _httpContextAccessor = httpContextAccessor;
     }
+
+    private Guid CurrentUserId =>
+        Guid.TryParse(_httpContextAccessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+
+    private string? CurrentUserIp =>
+        _httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
 
     public async Task<List<SalaryComponentDto>> GetComponentsAsync()
     {
@@ -43,6 +57,9 @@ public class SalaryService : ISalaryService
         _context.SalaryComponents.Add(component);
         await _context.SaveChangesAsync();
 
+        await _lookupCache.InvalidateSalaryComponentsAsync();
+        await _auditService.LogAsync(EntityNames.SalaryComponent, component.Id.ToString(), "Create", null, new { component.Name, component.Type }, CurrentUserId, CurrentUserIp);
+
         return new SalaryComponentDto
         {
             Id = component.Id,
@@ -64,6 +81,9 @@ public class SalaryService : ISalaryService
         if (request.Description != null) component.Description = request.Description;
 
         await _context.SaveChangesAsync();
+
+        await _lookupCache.InvalidateSalaryComponentsAsync();
+        await _auditService.LogAsync(EntityNames.SalaryComponent, component.Id.ToString(), "Update", null, new { component.Name, component.Type }, CurrentUserId, CurrentUserIp);
 
         return new SalaryComponentDto
         {
@@ -147,6 +167,8 @@ public class SalaryService : ISalaryService
         _context.Deductions.Add(deduction);
         await _context.SaveChangesAsync();
 
+        await _auditService.LogAsync(EntityNames.Deduction, deduction.Id.ToString(), "Create", null, new { deduction.EmployeeId, deduction.Type, deduction.Amount }, CurrentUserId, CurrentUserIp);
+
         return new DeductionDto
         {
             Id = deduction.Id,
@@ -157,5 +179,42 @@ public class SalaryService : ISalaryService
             StartDate = deduction.StartDate,
             EndDate = deduction.EndDate
         };
+    }
+
+    public async Task<DeductionDto> UpdateEmployeeDeductionAsync(Guid employeeId, Guid deductionId, CreateDeductionRequest request)
+    {
+        var deduction = await _context.Deductions.FirstOrDefaultAsync(d => d.Id == deductionId && d.EmployeeId == employeeId)
+            ?? throw new KeyNotFoundException($"Deduction {deductionId} not found");
+
+        deduction.Type = Enum.Parse<DeductionType>(request.Type, true);
+        deduction.Amount = request.Amount;
+        deduction.RemainingAmount = request.Amount;
+        deduction.StartDate = request.StartDate;
+        deduction.EndDate = request.EndDate;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(EntityNames.Deduction, deduction.Id.ToString(), "Update", null, new { deduction.EmployeeId, deduction.Type, deduction.Amount }, CurrentUserId, CurrentUserIp);
+
+        return new DeductionDto
+        {
+            Id = deduction.Id,
+            EmployeeId = deduction.EmployeeId,
+            Type = deduction.Type.ToString(),
+            Amount = deduction.Amount,
+            RemainingAmount = deduction.RemainingAmount,
+            StartDate = deduction.StartDate,
+            EndDate = deduction.EndDate
+        };
+    }
+
+    public async Task DeleteEmployeeDeductionAsync(Guid employeeId, Guid deductionId)
+    {
+        var deduction = await _context.Deductions.FirstOrDefaultAsync(d => d.Id == deductionId && d.EmployeeId == employeeId)
+            ?? throw new KeyNotFoundException($"Deduction {deductionId} not found");
+
+        _context.Deductions.Remove(deduction);
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(EntityNames.Deduction, deduction.Id.ToString(), "Delete", null, new { deduction.EmployeeId, deduction.Type }, CurrentUserId, CurrentUserIp);
     }
 }

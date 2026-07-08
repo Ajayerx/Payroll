@@ -1,50 +1,117 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useSelector } from 'react-redux';
 import {
   Box, Grid, Card, CardContent, Typography, Button, Table,
   TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Divider, MenuItem, TextField, Chip, LinearProgress
+  Divider, MenuItem, TextField, Chip, LinearProgress, Alert
 } from '@mui/material';
 import { PictureAsPdf, Download, AccountBalance, TrendingUp, TrendingDown } from '@mui/icons-material';
 import { PageHeader } from '../components/Common/PageHeader';
 import { StatCard } from '../components/Common/StatCard';
+import { TableSkeleton } from '../components/Common/Loading';
 import { formatCurrency } from '../utils/formatters';
-import { months } from '../utils/helpers';
-
-const salaryComponents = [
-  { name: 'Basic Salary', amount: 50000, type: 'Earning', percentage: 52 },
-  { name: 'House Rent Allowance', amount: 25000, type: 'Earning', percentage: 26 },
-  { name: 'Dearness Allowance', amount: 10000, type: 'Earning', percentage: 10 },
-  { name: 'Conveyance Allowance', amount: 3000, type: 'Earning', percentage: 3 },
-  { name: 'Medical Allowance', amount: 2000, type: 'Earning', percentage: 2 },
-  { name: 'Special Allowance', amount: 5000, type: 'Earning', percentage: 5 },
-  { name: 'Performance Bonus', amount: 2000, type: 'Earning', percentage: 2 },
-  { name: 'Professional Tax', amount: -200, type: 'Deduction' },
-  { name: 'Provident Fund', amount: -6000, type: 'Deduction' },
-  { name: 'Income Tax', amount: -5000, type: 'Deduction' },
-];
-
-const salaryHistory = [
-  { month: 'Jun', year: 2025, gross: 97000, net: 85800, status: 'Paid' },
-  { month: 'May', year: 2025, gross: 97000, net: 85800, status: 'Paid' },
-  { month: 'Apr', year: 2025, gross: 97000, net: 85800, status: 'Paid' },
-  { month: 'Mar', year: 2025, gross: 95000, net: 84000, status: 'Paid' },
-  { month: 'Feb', year: 2025, gross: 95000, net: 84000, status: 'Paid' },
-  { month: 'Jan', year: 2025, gross: 95000, net: 84000, status: 'Paid' },
-];
-
-const yearToDate = salaryHistory.reduce((acc, s) => ({
-  gross: acc.gross + s.gross,
-  net: acc.net + s.net,
-  tax: acc.tax + (s.gross - s.net),
-}), { gross: 0, net: 0, tax: 0 });
+import { months, downloadFile } from '../utils/helpers';
+import { employeeService } from '../services/employeeService';
+import { salaryService } from '../services/salaryService';
+import { payrollService } from '../services/payrollService';
+import { toast } from 'react-toastify';
 
 const MySalaryPage = () => {
+  const user = useSelector((state) => state.auth.user);
+  const [employee, setEmployee] = useState(null);
+  const [salaryData, setSalaryData] = useState(null);
+  const [payrollHistory, setPayrollHistory] = useState([]);
+  const [ydData, setYdData] = useState({ gross: 0, net: 0, tax: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
+  const [downloading, setDownloading] = useState(false);
 
-  const totalEarnings = salaryComponents.filter(c => c.type === 'Earning').reduce((s, c) => s + c.amount, 0);
-  const totalDeductions = Math.abs(salaryComponents.filter(c => c.type === 'Deduction').reduce((s, c) => s + c.amount, 0));
-  const netSalary = totalEarnings - totalDeductions;
+  const fetchData = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const empRes = await employeeService.getCurrentEmployee();
+      const emp = empRes.data;
+      setEmployee(emp);
+
+      const [structureRes, historyRes] = await Promise.all([
+        salaryService.getEmployeeStructure(emp.id).catch(() => null),
+        payrollService.getByMonthYear(month, year).catch(() => null),
+      ]);
+
+      if (structureRes?.data) {
+        setSalaryData(structureRes.data);
+      }
+
+      if (historyRes?.data?.items) {
+        setPayrollHistory(historyRes.data.items);
+        const ytd = historyRes.data.items.reduce((acc, p) => ({
+          gross: acc.gross + (p.grossSalary || 0),
+          net: acc.net + (p.netSalary || 0),
+          tax: acc.tax + (p.taxDeduction || 0),
+        }), { gross: 0, net: 0, tax: 0 });
+        setYdData(ytd);
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to load salary data');
+    } finally {
+      setLoading(false);
+    }
+  }, [user, month, year]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleDownloadSlip = async () => {
+    if (!payrollHistory.length) {
+      toast.info('No payroll records found for the selected period');
+      return;
+    }
+    const latestPayroll = payrollHistory[0];
+    setDownloading(true);
+    try {
+      const res = await payrollService.exportPdf(latestPayroll.id);
+      downloadFile(res.data, `salary_slip_${latestPayroll.month}_${latestPayroll.year}.html`);
+      toast.success('Salary slip downloaded');
+    } catch {
+      toast.error('Failed to download salary slip');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const earnings = salaryData?.earnings || [];
+  const deductions = salaryData?.deductions || [];
+  const totalEarnings = salaryData?.grossEarnings || earnings.reduce((s, c) => s + (c.amount || 0), 0);
+  const totalDeductions = salaryData?.totalDeductions || deductions.reduce((s, c) => s + (c.amount || 0), 0);
+  const netSalary = salaryData?.netSalary || (totalEarnings - totalDeductions);
+
+  const allComponents = [
+    ...earnings.map(c => ({ ...c, type: 'Earning' })),
+    ...deductions.map(c => ({ ...c, type: 'Deduction', amount: Math.abs(c.amount) })),
+  ];
+
+  if (loading) {
+    return (
+      <>
+        <PageHeader title="My Salary" subtitle="View salary breakdown, payslips, and year-to-date earnings" />
+        <TableSkeleton rows={6} columns={4} />
+      </>
+    );
+  }
+
+  if (error) {
+    return (
+      <>
+        <PageHeader title="My Salary" subtitle="View salary breakdown, payslips, and year-to-date earnings" />
+        <Alert severity="error">{error}</Alert>
+      </>
+    );
+  }
 
   return (
     <>
@@ -59,12 +126,13 @@ const MySalaryPage = () => {
             <TextField select size="small" value={year} onChange={(e) => setYear(e.target.value)} sx={{ minWidth: 100 }}>
               {[2023, 2024, 2025, 2026].map(y => <MenuItem key={y} value={y}>{y}</MenuItem>)}
             </TextField>
-            <Button variant="contained" startIcon={<PictureAsPdf />}>Download Slip</Button>
+            <Button variant="contained" startIcon={<PictureAsPdf />} onClick={handleDownloadSlip} disabled={downloading}>
+              {downloading ? 'Downloading...' : 'Download Slip'}
+            </Button>
           </Box>
         }
       />
 
-      {/* KPI Row */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard title="Gross Salary" value={formatCurrency(totalEarnings)} icon={<TrendingUp sx={{ fontSize: 36 }} />} color="primary.main" />
@@ -76,113 +144,119 @@ const MySalaryPage = () => {
           <StatCard title="Net Salary" value={formatCurrency(netSalary)} icon={<AccountBalance sx={{ fontSize: 36 }} />} color="success.main" subtitle="Take home" />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <StatCard title="YTD Net" value={formatCurrency(yearToDate.net)} icon={<AccountBalance sx={{ fontSize: 36 }} />} color="secondary.main" subtitle="Financial year" />
+          <StatCard title="YTD Net" value={formatCurrency(ydData.net)} icon={<AccountBalance sx={{ fontSize: 36 }} />} color="secondary.main" subtitle="Financial year" />
         </Grid>
       </Grid>
 
       <Grid container spacing={3}>
-        {/* Salary Breakdown */}
         <Grid size={{ xs: 12, md: 7 }}>
           <Card>
             <CardContent sx={{ p: 3 }}>
               <Typography variant="h6" fontWeight={600} gutterBottom>Salary Breakdown</Typography>
               <Divider sx={{ mb: 2 }} />
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ fontWeight: 600 }}>Component</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>%</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 600 }}>Amount</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {salaryComponents.map((c) => (
-                      <TableRow key={c.name} sx={{ '&:last-child td': { border: 0 } }}>
-                        <TableCell>{c.name}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={c.type}
-                            size="small"
-                            color={c.type === 'Earning' ? 'success' : 'error'}
-                            variant="outlined"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {c.percentage ? (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <LinearProgress
-                                variant="determinate"
-                                value={c.percentage}
-                                sx={{ width: 60, height: 6, borderRadius: 3 }}
-                                color={c.type === 'Earning' ? 'primary' : 'error'}
-                              />
-                              <Typography variant="caption">{c.percentage}%</Typography>
-                            </Box>
-                          ) : '-'}
-                        </TableCell>
-                        <TableCell align="right">
-                          <Typography fontWeight={500} color={c.amount > 0 ? 'text.primary' : 'error.main'}>
-                            {c.amount > 0 ? formatCurrency(c.amount) : `-${formatCurrency(Math.abs(c.amount))}`}
-                          </Typography>
+              {allComponents.length === 0 ? (
+                <Typography color="text.secondary">No salary structure configured</Typography>
+              ) : (
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600 }}>Component</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Type</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>%</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Amount</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {allComponents.map((c) => (
+                        <TableRow key={c.name} sx={{ '&:last-child td': { border: 0 } }}>
+                          <TableCell>{c.name}</TableCell>
+                          <TableCell>
+                            <Chip
+                              label={c.type}
+                              size="small"
+                              color={c.type === 'Earning' ? 'success' : 'error'}
+                              variant="outlined"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {c.percentage ? (
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <LinearProgress
+                                  variant="determinate"
+                                  value={c.percentage}
+                                  sx={{ width: 60, height: 6, borderRadius: 3 }}
+                                  color={c.type === 'Earning' ? 'primary' : 'error'}
+                                />
+                                <Typography variant="caption">{c.percentage}%</Typography>
+                              </Box>
+                            ) : '-'}
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography fontWeight={500} color={c.type === 'Earning' ? 'text.primary' : 'error.main'}>
+                              {c.type === 'Earning' ? formatCurrency(c.amount) : `-${formatCurrency(c.amount)}`}
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow>
+                        <TableCell colSpan={3} sx={{ fontWeight: 700, borderBottom: 'none' }}>Net Salary</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700, color: 'success.main', fontSize: 16, borderBottom: 'none' }}>
+                          {formatCurrency(netSalary)}
                         </TableCell>
                       </TableRow>
-                    ))}
-                    <TableRow>
-                      <TableCell colSpan={3} sx={{ fontWeight: 700, borderBottom: 'none' }}>Net Salary</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700, color: 'success.main', fontSize: 16, borderBottom: 'none' }}>
-                        {formatCurrency(netSalary)}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
             </CardContent>
           </Card>
         </Grid>
 
-        {/* Right column: History + YTD */}
         <Grid size={{ xs: 12, md: 5 }}>
-          {/* Salary History */}
           <Card sx={{ mb: 3 }}>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight={600} gutterBottom>Salary History</Typography>
+              <Typography variant="h6" fontWeight={600} gutterBottom>Payroll History</Typography>
               <Divider sx={{ mb: 2 }} />
-              {salaryHistory.map((s, i) => (
-                <Box key={i} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1.5,
-                  borderBottom: i < salaryHistory.length - 1 ? '1px solid' : 'none',
-                  borderColor: 'divider' }}>
-                  <Box>
-                    <Typography variant="body2" fontWeight={500}>{s.month} {s.year}</Typography>
-                    <Typography variant="caption" color="text.secondary">Gross: {formatCurrency(s.gross)}</Typography>
+              {payrollHistory.length === 0 ? (
+                <Typography color="text.secondary">No payroll records for this period</Typography>
+              ) : (
+                payrollHistory.map((s, i) => (
+                  <Box key={s.id} sx={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1.5,
+                    borderBottom: i < payrollHistory.length - 1 ? '1px solid' : 'none',
+                    borderColor: 'divider'
+                  }}>
+                    <Box>
+                      <Typography variant="body2" fontWeight={500}>{months[s.month - 1]?.label} {s.year}</Typography>
+                      <Typography variant="caption" color="text.secondary">Gross: {formatCurrency(s.grossSalary)}</Typography>
+                    </Box>
+                    <Box sx={{ textAlign: 'right' }}>
+                      <Typography variant="body2" fontWeight={600} color="success.main">{formatCurrency(s.netSalary)}</Typography>
+                      <Chip label={s.status} size="small" color={s.status === 'Paid' ? 'success' : 'warning'} variant="outlined" />
+                    </Box>
                   </Box>
-                  <Box sx={{ textAlign: 'right' }}>
-                    <Typography variant="body2" fontWeight={600} color="success.main">{formatCurrency(s.net)}</Typography>
-                    <Chip label={s.status} size="small" color="success" variant="outlined" />
-                  </Box>
-                </Box>
-              ))}
+                ))
+              )}
             </CardContent>
           </Card>
 
-          {/* Year to Date */}
           <Card>
             <CardContent sx={{ p: 3 }}>
               <Typography variant="h6" fontWeight={600} gutterBottom>Year to Date (YTD)</Typography>
               <Divider sx={{ mb: 2 }} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5 }}>
                 <Typography variant="body2" color="text.secondary">Total Gross</Typography>
-                <Typography variant="body2" fontWeight={600}>{formatCurrency(yearToDate.gross)}</Typography>
+                <Typography variant="body2" fontWeight={600}>{formatCurrency(ydData.gross)}</Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5 }}>
                 <Typography variant="body2" color="text.secondary">Total Tax</Typography>
-                <Typography variant="body2" fontWeight={600} color="error.main">{formatCurrency(yearToDate.tax)}</Typography>
+                <Typography variant="body2" fontWeight={600} color="error.main">{formatCurrency(ydData.tax)}</Typography>
               </Box>
               <Divider sx={{ my: 1 }} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body1" fontWeight={700}>Net YTD</Typography>
-                <Typography variant="body1" fontWeight={700} color="primary.main">{formatCurrency(yearToDate.net)}</Typography>
+                <Typography variant="body1" fontWeight={700} color="primary.main">{formatCurrency(ydData.net)}</Typography>
               </Box>
               <Box sx={{ mt: 2 }}>
                 <Button fullWidth variant="outlined" startIcon={<Download />}>

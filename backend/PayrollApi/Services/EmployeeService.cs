@@ -1,18 +1,34 @@
+using System.Globalization;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
+using PayrollApi.Constants;
 using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Models.Entities;
+using PayrollApi.Models.Enums;
+using PayrollApi.Services.Interfaces;
+using PayrollApi.Utils;
 
 namespace PayrollApi.Services;
 
 public class EmployeeService : IEmployeeService
 {
     private readonly PayrollDbContext _context;
+    private readonly IAuditService _auditService;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public EmployeeService(PayrollDbContext context)
+    public EmployeeService(PayrollDbContext context, IAuditService auditService, IHttpContextAccessor httpContextAccessor)
     {
         _context = context;
+        _auditService = auditService;
+        _httpContextAccessor = httpContextAccessor;
     }
+
+    private Guid CurrentUserId =>
+        Guid.TryParse(_httpContextAccessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+
+    private string? CurrentUserIp =>
+        _httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
 
     public async Task<EmployeeListResponse> GetAllAsync(int page, int pageSize, string? search, string? department, string? status)
     {
@@ -61,12 +77,20 @@ public class EmployeeService : IEmployeeService
         return MapDto(employee);
     }
 
+    public async Task<EmployeeDto> GetByUserIdAsync(Guid userId)
+    {
+        var employee = await _context.Employees.FirstOrDefaultAsync(e => e.UserId == userId)
+            ?? throw new KeyNotFoundException("Employee profile not found");
+        return MapDto(employee);
+    }
+
     public async Task<EmployeeDto> CreateAsync(CreateEmployeeRequest request)
     {
+        var tempPassword = PasswordPolicy.GenerateTempPassword();
         var user = new User
         {
             Email = request.Email ?? $"{request.FirstName.ToLower()}.{request.LastName.ToLower()}@company.com",
-            Password = BCrypt.Net.BCrypt.HashPassword("Welcome@123"),
+            Password = BCrypt.Net.BCrypt.HashPassword(tempPassword),
             FirstName = request.FirstName,
             LastName = request.LastName,
             Role = Models.Enums.UserRole.Employee,
@@ -75,6 +99,8 @@ public class EmployeeService : IEmployeeService
 
         _context.Users.Add(user);
         await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(EntityNames.User, user.Id.ToString(), "Create", null, new { user.Email, user.FirstName, user.LastName, user.Role }, CurrentUserId, CurrentUserIp);
 
         var code = await GenerateEmployeeCode(request.Department ?? "EMP");
 
@@ -104,6 +130,8 @@ public class EmployeeService : IEmployeeService
         _context.Employees.Add(employee);
         await _context.SaveChangesAsync();
 
+        await _auditService.LogAsync(EntityNames.Employee, employee.Id.ToString(), "Create", null, MapDto(employee), CurrentUserId, CurrentUserIp);
+
         return MapDto(employee);
     }
 
@@ -131,7 +159,10 @@ public class EmployeeService : IEmployeeService
         if (request.IsActive.HasValue) employee.IsActive = request.IsActive.Value;
 
         employee.UpdatedDate = DateTime.UtcNow;
+        employee.UpdatedBy = CurrentUserId;
         await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(EntityNames.Employee, employee.Id.ToString(), "Update", null, MapDto(employee), CurrentUserId, CurrentUserIp);
 
         return MapDto(employee);
     }
@@ -143,7 +174,10 @@ public class EmployeeService : IEmployeeService
 
         employee.IsActive = false;
         employee.UpdatedDate = DateTime.UtcNow;
+        employee.UpdatedBy = CurrentUserId;
         await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(EntityNames.Employee, employee.Id.ToString(), "Delete", null, new { employee.IsActive }, CurrentUserId, CurrentUserIp);
     }
 
     public async Task<EmployeeListResponse> SearchAsync(string query)
@@ -165,6 +199,139 @@ public class EmployeeService : IEmployeeService
         var prefix = department.Length >= 3 ? department[..3].ToUpper() : department.ToUpper();
         var count = await _context.Employees.CountAsync(e => e.Department == department);
         return $"{prefix}{(count + 1).ToString().PadLeft(4, '0')}";
+    }
+
+    public async Task<BulkImportResult> BulkImportAsync(IFormFile file)
+    {
+        var result = new BulkImportResult();
+        using var reader = new StreamReader(file.OpenReadStream());
+        var header = await reader.ReadLineAsync();
+        if (header == null) return result;
+
+        string? line;
+        while ((line = await reader.ReadLineAsync()) != null)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                var parts = line.Split(',');
+                if (parts.Length < 2) { result.Failed++; result.Errors.Add($"Invalid line: {line}"); continue; }
+
+                var firstName = parts[0].Trim();
+                var lastName = parts[1].Trim();
+                var email = parts.Length > 2 ? parts[2].Trim() : $"{firstName.ToLower()}.{lastName.ToLower()}@company.com";
+                var department = parts.Length > 3 ? parts[3].Trim() : null;
+                var designation = parts.Length > 4 ? parts[4].Trim() : null;
+
+                var tempPassword = PasswordPolicy.GenerateTempPassword();
+                var user = new User
+                {
+                    Email = email,
+                    Password = BCrypt.Net.BCrypt.HashPassword(tempPassword),
+                    FirstName = firstName,
+                    LastName = lastName,
+                    Role = UserRole.Employee,
+                    IsActive = true
+                };
+                _context.Users.Add(user);
+                await _context.SaveChangesAsync();
+
+                var employee = new Employee
+                {
+                    UserId = user.Id,
+                    EmployeeCode = $"EMP{DateTime.UtcNow:yyyyMMdd}{_context.Employees.Count() + 1}",
+                    FirstName = firstName,
+                    LastName = lastName,
+                    Email = email,
+                    Department = department,
+                    Designation = designation,
+                    DateOfJoining = DateTime.UtcNow,
+                    IsActive = true
+                };
+                _context.Employees.Add(employee);
+                await _context.SaveChangesAsync();
+                result.Imported++;
+            }
+            catch (Exception ex)
+            {
+                result.Failed++;
+                result.Errors.Add($"Error importing line '{line}': {ex.Message}");
+            }
+        }
+        return result;
+    }
+
+    public async Task<List<EmployeeDocumentDto>> GetDocumentsAsync(Guid employeeId)
+    {
+        return await _context.EmployeeDocuments
+            .Where(d => d.EmployeeId == employeeId)
+            .OrderByDescending(d => d.UploadedDate)
+            .Select(d => new EmployeeDocumentDto
+            {
+                Id = d.Id,
+                FileName = d.FileName,
+                ContentType = d.ContentType,
+                FileSize = d.FileSize,
+                Category = d.Category,
+                UploadedDate = d.UploadedDate
+            })
+            .ToListAsync();
+    }
+
+    public async Task<EmployeeDocumentDto> UploadDocumentAsync(Guid employeeId, IFormFile file, string? category)
+    {
+        var uploadsDir = Path.Combine(Directory.GetCurrentDirectory(), "Uploads", employeeId.ToString());
+        Directory.CreateDirectory(uploadsDir);
+
+        var fileName = $"{Guid.NewGuid()}_{file.FileName}";
+        var filePath = Path.Combine(uploadsDir, fileName);
+
+        using (var stream = new FileStream(filePath, FileMode.Create))
+        {
+            await file.CopyToAsync(stream);
+        }
+
+        var doc = new EmployeeDocument
+        {
+            EmployeeId = employeeId,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            FileSize = file.Length,
+            FilePath = filePath,
+            Category = category
+        };
+
+        _context.EmployeeDocuments.Add(doc);
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("EmployeeDocument", doc.Id.ToString(), "Upload", null,
+            new { doc.EmployeeId, doc.FileName, doc.Category }, CurrentUserId, CurrentUserIp);
+
+        return new EmployeeDocumentDto
+        {
+            Id = doc.Id,
+            FileName = doc.FileName,
+            ContentType = doc.ContentType,
+            FileSize = doc.FileSize,
+            Category = doc.Category,
+            UploadedDate = doc.UploadedDate
+        };
+    }
+
+    public async Task DeleteDocumentAsync(Guid employeeId, Guid documentId)
+    {
+        var doc = await _context.EmployeeDocuments
+            .FirstOrDefaultAsync(d => d.Id == documentId && d.EmployeeId == employeeId)
+            ?? throw new KeyNotFoundException("Document not found");
+
+        if (File.Exists(doc.FilePath))
+            File.Delete(doc.FilePath);
+
+        _context.EmployeeDocuments.Remove(doc);
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("EmployeeDocument", doc.Id.ToString(), "Delete", null,
+            new { doc.EmployeeId, doc.FileName }, CurrentUserId, CurrentUserIp);
     }
 
     private static EmployeeDto MapDto(Employee e) => new()

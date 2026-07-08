@@ -1,7 +1,9 @@
+using System.Threading.RateLimiting;
 using System.Text;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -29,7 +31,10 @@ builder.Services.AddDbContext<PayrollDbContext>(options =>
 
 // Auth
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var secretKey = Encoding.UTF8.GetBytes(jwtSettings["Secret"]!);
+var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET")
+    ?? jwtSettings["Secret"]
+    ?? throw new InvalidOperationException("JWT Secret is not configured. Set JWT_SECRET environment variable or JwtSettings:Secret in appsettings.json.");
+var secretKey = Encoding.UTF8.GetBytes(jwtSecret);
 
 builder.Services.AddAuthentication(options =>
 {
@@ -69,6 +74,13 @@ builder.Services.AddScoped<ICacheService, CacheService>();
 builder.Services.AddScoped<ILookupCacheService, LookupCacheService>();
 builder.Services.AddScoped<ILeaveService, LeaveService>();
 builder.Services.AddScoped<ISalaryCalculationService, SalaryCalculationService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<INotificationCleanupService, NotificationCleanupService>();
+builder.Services.AddHostedService<NotificationCleanupHostedService>();
+
+// HTTP Context (for audit logging)
+builder.Services.AddHttpContextAccessor();
 
 // FluentValidation
 builder.Services.AddFluentValidationAutoValidation();
@@ -132,6 +144,26 @@ builder.Services.AddCors(options =>
 
 // Rate Limiting
 builder.Services.AddMemoryCache();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.AddFixedWindowLimiter("Auth", authOptions =>
+    {
+        authOptions.PermitLimit = 10;
+        authOptions.Window = TimeSpan.FromMinutes(1);
+        authOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        authOptions.QueueLimit = 2;
+    });
+
+    options.AddFixedWindowLimiter("Api", apiOptions =>
+    {
+        apiOptions.PermitLimit = 100;
+        apiOptions.Window = TimeSpan.FromMinutes(1);
+        apiOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        apiOptions.QueueLimit = 5;
+    });
+});
 
 // SignalR
 builder.Services.AddSignalR();
@@ -149,6 +181,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowFrontend");
+
+app.UseRateLimiter();
 
 app.UseAuthentication();
 app.UseAuthorization();

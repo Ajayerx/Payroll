@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
@@ -9,6 +10,7 @@ import { AdminLayout } from './components/Layout/AdminLayout';
 import { EmployeeLayout } from './components/Layout/EmployeeLayout';
 import { ErrorBoundary } from './components/Common/ErrorBoundary';
 import { ROLES } from './constants';
+import { checkSessionTimeout } from './services/axios';
 
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
@@ -22,10 +24,11 @@ import SettingsPage from './pages/SettingsPage';
 import MySalaryPage from './pages/MySalaryPage';
 import LeaveListPage from './pages/LeaveListPage';
 import LeaveFormPage from './pages/LeaveFormPage';
-
-interface AppState {
-  ui?: { theme?: 'light' | 'dark' };
-}
+import ProfilePage from './pages/ProfilePage';
+import ChangePasswordPage from './pages/ChangePasswordPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import RegisterPage from './pages/RegisterPage';
 
 const getTheme = (mode: 'light' | 'dark') => createTheme({
   palette: {
@@ -84,6 +87,10 @@ const getTheme = (mode: 'light' | 'dark') => createTheme({
 function App() {
   const themeMode = useSelector((state: AppState) => state.ui?.theme || 'light');
 
+  useEffect(() => {
+    checkSessionTimeout();
+  }, []);
+
   return (
     <ThemeProvider theme={getTheme(themeMode)}>
       <CssBaseline />
@@ -91,6 +98,9 @@ function App() {
         <ErrorBoundary>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/register" element={<RegisterPage />} />
 
             {/* Admin & HR Routes */}
             <Route element={<ProtectedRoute roles={[ROLES.ADMIN, ROLES.HR_MANAGER]} />}>
@@ -106,6 +116,8 @@ function App() {
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/leaves" element={<LeaveListPage />} />
                 <Route path="/leaves/new" element={<LeaveFormPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/change-password" element={<ChangePasswordPage />} />
               </Route>
             </Route>
 
@@ -116,6 +128,8 @@ function App() {
                 <Route path="/my-salary" element={<MySalaryPage />} />
                 <Route path="/leaves" element={<LeaveListPage />} />
                 <Route path="/leaves/new" element={<LeaveFormPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+                <Route path="/change-password" element={<ChangePasswordPage />} />
               </Route>
             </Route>
 

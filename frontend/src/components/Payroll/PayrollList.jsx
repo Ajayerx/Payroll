@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, TextField, Button, MenuItem, Grid, Typography, IconButton,
-  Tooltip, Card, CardContent
+  Tooltip, Card, CardContent, Dialog, DialogTitle, DialogContent,
+  DialogContentText, DialogActions
 } from '@mui/material';
 import { toast } from 'react-toastify';
 import {
@@ -33,6 +34,8 @@ export const PayrollList = () => {
   const [deptFilter, setDeptFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, payroll: null, action: '' });
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -68,6 +71,41 @@ export const PayrollList = () => {
     }
   };
 
+  const handleAction = async () => {
+    const { payroll, action } = confirmDialog;
+    if (!payroll) return;
+    setUpdating(true);
+    try {
+      if (action === 'process') {
+        await payrollService.update(payroll.id, { status: 'Processed' });
+        toast.success(`Payroll processed for ${payroll.employeeName}`);
+      } else if (action === 'mark-paid') {
+        await payrollService.update(payroll.id, { status: 'Paid' });
+        toast.success(`Payroll marked as paid for ${payroll.employeeName}`);
+      } else if (action === 'edit') {
+        navigate(`/payroll/${payroll.id}/edit`);
+        return;
+      }
+      setConfirmDialog({ open: false, payroll: null, action: '' });
+      setPayrolls(prev => prev.map(p => p.id === payroll.id
+        ? { ...p, status: action === 'process' ? 'Processed' : 'Paid' } : p));
+    } catch {
+      toast.error(`Failed to ${action} payroll`);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const handleGenerateSlip = async (id) => {
+    try {
+      await payrollService.generateSlip(id);
+      toast.success('Salary slip generated');
+      setPayrolls(prev => prev.map(p => p.id === id ? { ...p, status: 'Processed' } : p));
+    } catch {
+      toast.error('Failed to generate slip');
+    }
+  };
+
   const stats = {
     total: payrolls.length,
     totalGross: payrolls.reduce((s, p) => s + p.grossSalary, 0),
@@ -96,12 +134,24 @@ export const PayrollList = () => {
           </Tooltip>
           {r.status === 'Draft' && (
             <>
-              <Tooltip title="Edit"><IconButton size="small"><Edit fontSize="small" /></IconButton></Tooltip>
-              <Tooltip title="Process"><IconButton size="small" color="success"><CheckCircle fontSize="small" /></IconButton></Tooltip>
+              <Tooltip title="Edit">
+                <IconButton size="small" onClick={() => setConfirmDialog({ open: true, payroll: r, action: 'edit' })}>
+                  <Edit fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Process">
+                <IconButton size="small" color="success" onClick={() => setConfirmDialog({ open: true, payroll: r, action: 'process' })}>
+                  <CheckCircle fontSize="small" />
+                </IconButton>
+              </Tooltip>
             </>
           )}
           {r.status === 'Processed' && (
-            <Tooltip title="Mark as Paid"><IconButton size="small" color="success"><CheckCircle fontSize="small" /></IconButton></Tooltip>
+            <Tooltip title="Mark as Paid">
+              <IconButton size="small" color="success" onClick={() => setConfirmDialog({ open: true, payroll: r, action: 'mark-paid' })}>
+                <CheckCircle fontSize="small" />
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
       ),
@@ -236,6 +286,23 @@ export const PayrollList = () => {
           onRowsPerPageChange={setRowsPerPage}
         />
       )}
+
+      <Dialog open={confirmDialog.open} onClose={() => !updating && setConfirmDialog({ open: false, payroll: null, action: '' })}>
+        <DialogTitle>Confirm Action</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {confirmDialog.action === 'process' && `Process payroll for ${confirmDialog.payroll?.employeeName}?`}
+            {confirmDialog.action === 'mark-paid' && `Mark payroll as Paid for ${confirmDialog.payroll?.employeeName}?`}
+            {confirmDialog.action === 'edit' && `Edit payroll for ${confirmDialog.payroll?.employeeName}?`}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDialog({ open: false, payroll: null, action: '' })} disabled={updating}>Cancel</Button>
+          <Button variant="contained" onClick={handleAction} disabled={updating}>
+            {updating ? 'Processing...' : 'Confirm'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

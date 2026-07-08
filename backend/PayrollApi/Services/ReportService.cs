@@ -1,14 +1,24 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using OfficeOpenXml;
 using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Models.Enums;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace PayrollApi.Services;
 
 public class ReportService : IReportService
 {
     private readonly PayrollDbContext _context;
+
+    static ReportService()
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+    }
 
     public ReportService(PayrollDbContext context)
     {
@@ -148,8 +158,8 @@ public class ReportService : IReportService
         return format.ToLower() switch
         {
             "csv" => GenerateCsv(data),
-            "excel" => GenerateExcelHtml(data),
-            "pdf" => GeneratePdfHtml(data),
+            "excel" => GenerateExcel(data),
+            "pdf" => GeneratePdf(data),
             _ => GenerateCsv(data)
         };
     }
@@ -165,45 +175,131 @@ public class ReportService : IReportService
         return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
-    private static byte[] GenerateExcelHtml(List<SalaryRegisterDto> data)
+    private static byte[] GenerateExcel(List<SalaryRegisterDto> data)
     {
-        var rows = string.Join("", data.Select(d =>
-            $"<tr><td>{d.EmployeeCode}</td><td>{d.EmployeeName}</td><td>{d.Department}</td><td>{d.Designation}</td><td align='right'>{d.GrossPay:N2}</td><td align='right'>{d.Tax:N2}</td><td align='right'>{d.OtherDeductions:N2}</td><td align='right'>{d.NetPay:N2}</td></tr>"));
+        using var package = new ExcelPackage();
+        var ws = package.Workbook.Worksheets.Add("Salary Register");
+        ws.Cells[1, 1].Value = "Employee Code";
+        ws.Cells[1, 2].Value = "Name";
+        ws.Cells[1, 3].Value = "Department";
+        ws.Cells[1, 4].Value = "Designation";
+        ws.Cells[1, 5].Value = "Gross";
+        ws.Cells[1, 6].Value = "Tax";
+        ws.Cells[1, 7].Value = "Deductions";
+        ws.Cells[1, 8].Value = "Net";
 
-        var html = $@"<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:x='urn:schemas-microsoft-com:office:excel' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset='UTF-8'><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Report</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
-<body><table border='1' style='border-collapse:collapse;font-family:Arial;font-size:11px'>
-<tr style='background:#1a237e;color:#fff'><th>Code</th><th>Name</th><th>Department</th><th>Designation</th><th>Gross</th><th>Tax</th><th>Deductions</th><th>Net</th></tr>
-{rows}</table></body></html>";
+        using (var r = ws.Cells[1, 1, 1, 8])
+        {
+            r.Style.Font.Bold = true;
+            r.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+            r.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.FromArgb(26, 35, 126));
+            r.Style.Font.Color.SetColor(System.Drawing.Color.White);
+        }
 
-        return Encoding.UTF8.GetBytes(html);
+        for (int i = 0; i < data.Count; i++)
+        {
+            var row = i + 2;
+            ws.Cells[row, 1].Value = data[i].EmployeeCode;
+            ws.Cells[row, 2].Value = data[i].EmployeeName;
+            ws.Cells[row, 3].Value = data[i].Department;
+            ws.Cells[row, 4].Value = data[i].Designation;
+            ws.Cells[row, 5].Value = data[i].GrossPay;
+            ws.Cells[row, 5].Style.Numberformat.Format = "#,##0.00";
+            ws.Cells[row, 6].Value = data[i].Tax;
+            ws.Cells[row, 6].Style.Numberformat.Format = "#,##0.00";
+            ws.Cells[row, 7].Value = data[i].OtherDeductions;
+            ws.Cells[row, 7].Style.Numberformat.Format = "#,##0.00";
+            ws.Cells[row, 8].Value = data[i].NetPay;
+            ws.Cells[row, 8].Style.Numberformat.Format = "#,##0.00";
+        }
+
+        var totalRow = data.Count + 2;
+        ws.Cells[totalRow, 1].Value = "TOTAL";
+        ws.Cells[totalRow, 1, totalRow, 4].Merge = true;
+        ws.Cells[totalRow, 5].Value = data.Sum(d => d.GrossPay);
+        ws.Cells[totalRow, 6].Value = data.Sum(d => d.Tax);
+        ws.Cells[totalRow, 7].Value = data.Sum(d => d.OtherDeductions);
+        ws.Cells[totalRow, 8].Value = data.Sum(d => d.NetPay);
+        using (var r = ws.Cells[totalRow, 1, totalRow, 8])
+        {
+            r.Style.Font.Bold = true;
+            r.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+            r.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.FromArgb(232, 234, 246));
+        }
+
+        ws.Cells.AutoFitColumns();
+        return package.GetAsByteArray();
     }
 
-    private static byte[] GeneratePdfHtml(List<SalaryRegisterDto> data)
+    private static byte[] GeneratePdf(List<SalaryRegisterDto> data)
     {
-        var rows = string.Join("", data.Select(d =>
-            $"<tr><td style='padding:6px 10px;border:1px solid #ddd'>{d.EmployeeCode}</td><td style='padding:6px 10px;border:1px solid #ddd'>{d.EmployeeName}</td><td style='padding:6px 10px;border:1px solid #ddd'>{d.Department}</td><td style='padding:6px 10px;border:1px solid #ddd'>{d.Designation}</td><td style='padding:6px 10px;border:1px solid #ddd;text-align:right'>&#8377;{d.GrossPay:N2}</td><td style='padding:6px 10px;border:1px solid #ddd;text-align:right'>&#8377;{d.Tax:N2}</td><td style='padding:6px 10px;border:1px solid #ddd;text-align:right'>&#8377;{d.OtherDeductions:N2}</td><td style='padding:6px 10px;border:1px solid #ddd;text-align:right'><strong>&#8377;{d.NetPay:N2}</strong></td></tr>"));
-
         var totalGross = data.Sum(d => d.GrossPay);
         var totalTax = data.Sum(d => d.Tax);
         var totalDeductions = data.Sum(d => d.OtherDeductions);
         var totalNet = data.Sum(d => d.NetPay);
 
-        var html = $@"<!DOCTYPE html>
-<html><head><meta charset='utf-8'><title>Payroll Report</title>
-<style>body{{font-family:Arial,sans-serif;margin:30px}}h1{{color:#1a237e;border-bottom:2px solid #1a237e;padding-bottom:10px}}
-table{{width:100%;border-collapse:collapse;margin:20px 0}}th{{background:#1a237e;color:#fff;padding:8px 10px;text-align:left}}
-td{{padding:6px 10px;border:1px solid #ddd}}.total{{background:#e8eaf6;font-weight:700}}
-.footer{{text-align:center;color:#999;font-size:11px;margin-top:30px}}</style></head>
-<body><h1>Payroll Report</h1>
-<p style='color:#666'>Generated: {DateTime.UtcNow:dd-MMM-yyyy HH:mm}</p>
-<table><thead><tr><th>Code</th><th>Name</th><th>Department</th><th>Designation</th><th>Gross</th><th>Tax</th><th>Deductions</th><th>Net</th></tr></thead><tbody>
-{rows}
-<tr class='total'><td colspan='4' style='text-align:right'>TOTAL</td><td style='text-align:right'>&#8377;{totalGross:N2}</td><td style='text-align:right'>&#8377;{totalTax:N2}</td><td style='text-align:right'>&#8377;{totalDeductions:N2}</td><td style='text-align:right'>&#8377;{totalNet:N2}</td></tr>
-</tbody></table>
-<p><strong>Summary:</strong> {data.Count} employees | Total Gross: &#8377;{totalGross:N2} | Total Net: &#8377;{totalNet:N2} | Total Tax: &#8377;{totalTax:N2}</p>
-<p class='footer'>This is a computer-generated document &middot; Payroll Solutions Inc.</p></body></html>";
+        return Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4.Landscape());
+                page.Margin(30);
+                page.DefaultTextStyle(style => style.FontSize(10));
 
-        return Encoding.UTF8.GetBytes(html);
+                page.Header().Element(c => c.Column(col =>
+                {
+                    col.Item().Text("Payroll Report").FontSize(18).Bold().FontColor(Colors.Blue.Darken4);
+                    col.Item().Text($"Generated: {DateTime.UtcNow:dd-MMM-yyyy HH:mm}").FontSize(9).FontColor(Colors.Grey.Darken2);
+                    col.Item().LineHorizontal(1).LineColor(Colors.Blue.Darken4);
+                }));
+
+                page.Content().Element(c => c.Table(table =>
+                {
+                    table.ColumnsDefinition(cols =>
+                    {
+                        cols.RelativeColumn(2);
+                        cols.RelativeColumn(3);
+                        cols.RelativeColumn(2);
+                        cols.RelativeColumn(2);
+                        cols.RelativeColumn(2);
+                        cols.RelativeColumn(2);
+                        cols.RelativeColumn(2);
+                        cols.RelativeColumn(2);
+                    });
+
+                    table.Header(header =>
+                    {
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Code").FontColor(Colors.White).Bold();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Name").FontColor(Colors.White).Bold();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Department").FontColor(Colors.White).Bold();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Designation").FontColor(Colors.White).Bold();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Gross").FontColor(Colors.White).Bold().AlignRight();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Tax").FontColor(Colors.White).Bold().AlignRight();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Deductions").FontColor(Colors.White).Bold().AlignRight();
+                        header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Net").FontColor(Colors.White).Bold().AlignRight();
+                    });
+
+                    foreach (var item in data)
+                    {
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(item.EmployeeCode);
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(item.EmployeeName);
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(item.Department);
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(item.Designation);
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text($"{item.GrossPay:N2}").AlignRight();
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text($"{item.Tax:N2}").AlignRight();
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text($"{item.OtherDeductions:N2}").AlignRight();
+                        table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text($"{item.NetPay:N2}").AlignRight().Bold();
+                    }
+
+                    table.Cell().ColumnSpan(4).Background(Colors.Grey.Lighten3).Padding(4).Text("TOTAL").Bold().AlignRight();
+                    table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text($"{totalGross:N2}").AlignRight().Bold();
+                    table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text($"{totalTax:N2}").AlignRight().Bold();
+                    table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text($"{totalDeductions:N2}").AlignRight().Bold();
+                    table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text($"{totalNet:N2}").AlignRight().Bold();
+                }));
+
+                page.Footer().AlignCenter().Text("This is a computer-generated document").FontSize(8).FontColor(Colors.Grey.Darken2);
+            });
+        }).GeneratePdf();
     }
 }

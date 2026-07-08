@@ -41,3 +41,13 @@ public class ApproveLeaveRequest
 {
     public string? Comments { get; set; }
 }
+
+public class LeaveBalanceDto
+{
+    public Guid LeaveTypeId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal Total { get; set; }
+    public decimal Taken { get; set; }
+    public decimal Balance { get; set; }
+    public bool IsPaid { get; set; }
+}

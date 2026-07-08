@@ -8,6 +8,7 @@ using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Models.Entities;
 using PayrollApi.Models.Enums;
+using PayrollApi.Utils;
 
 namespace PayrollApi.Services;
 
@@ -49,6 +50,10 @@ public class AuthService : IAuthService
     {
         if (await _context.Users.AnyAsync(u => u.Email == request.Email))
             throw new InvalidOperationException("Email already registered");
+
+        var (valid, message) = PasswordPolicy.Validate(request.Password);
+        if (!valid)
+            throw new InvalidOperationException(message);
 
         var user = new User
         {
@@ -125,6 +130,10 @@ public class AuthService : IAuthService
         if (!BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.Password))
             throw new UnauthorizedAccessException("Current password is incorrect");
 
+        var (valid, message) = PasswordPolicy.Validate(request.NewPassword);
+        if (!valid)
+            throw new InvalidOperationException(message);
+
         user.Password = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
         await _context.SaveChangesAsync();
     }
@@ -134,8 +143,24 @@ public class AuthService : IAuthService
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
         if (user == null) return;
 
-        // In production, send email with reset link
-        await Task.CompletedTask;
+        user.ResetToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        user.ResetTokenExpiry = DateTime.UtcNow.AddHours(1);
+        await _context.SaveChangesAsync();
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordRequest request)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u =>
+            u.ResetToken == request.Token && u.ResetTokenExpiry > DateTime.UtcNow)
+            ?? throw new InvalidOperationException("Invalid or expired reset token");
+
+        var (valid, message) = PasswordPolicy.Validate(request.NewPassword);
+        if (!valid) throw new InvalidOperationException(message);
+
+        user.Password = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.ResetToken = null;
+        user.ResetTokenExpiry = null;
+        await _context.SaveChangesAsync();
     }
 
     private async Task<string> CreateRefreshTokenAsync(Guid userId)

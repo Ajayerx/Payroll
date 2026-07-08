@@ -5,6 +5,8 @@ export const employeeService = {
 
   getById: (id) => api.get(`/employees/${id}`),
 
+  getCurrentEmployee: () => api.get('/employees/me'),
+
   create: (data) => api.post('/employees', data),
 
   update: (id, data) => api.put(`/employees/${id}`, data),

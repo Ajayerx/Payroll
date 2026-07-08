@@ -13,5 +13,5 @@ public interface ILeaveService
     Task CancelAsync(Guid id);
     Task<List<LeaveDto>> GetByEmployeeAsync(Guid employeeId, string? status);
     Task<List<LeaveTypeDto>> GetLeaveTypesAsync();
-    Task<object> GetLeaveBalanceAsync(Guid employeeId);
+    Task<List<LeaveBalanceDto>> GetLeaveBalanceAsync(Guid employeeId);
 }

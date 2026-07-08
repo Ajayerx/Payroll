@@ -1,12 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Grid, Card, CardContent, Typography, TextField, Button,
   Tabs, Tab, Divider, List, ListItem,
-  ListItemText, IconButton, Chip
+  ListItemText, IconButton, Chip, Dialog, DialogTitle,
+  DialogContent, DialogActions, Switch, FormControlLabel
 } from '@mui/material';
-import { Save, Add, Delete, Edit } from '@mui/icons-material';
+import { Save, Add, Delete, Edit, Close } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { PageHeader } from '../Common/PageHeader';
+import { LoadingSpinner } from '../Common/Loading';
+import { settingsService } from '../../services/settingsService';
+import { salaryService } from '../../services/salaryService';
 
 const settingsTabs = [
   { label: 'Company Profile' },
@@ -15,47 +19,106 @@ const settingsTabs = [
   { label: 'Salary Components' },
 ];
 
+const defaultDialog = { open: false, editItem: null, type: '' };
+
 export const Settings = () => {
   const [tab, setTab] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
   const [company, setCompany] = useState({
-    name: 'TechCorp Solutions Pvt Ltd',
-    address: '456, Brigade Road, Bangalore - 560001',
-    email: 'hr@techcorp.com',
-    phone: '080-45678901',
-    gstin: '29ABCDE1234F1Z5',
-    pan: 'ABCDE1234F',
+    companyName: '', address: '', email: '', phone: '', gstin: '', pan: '', logoUrl: ''
   });
+  const [taxSlabs, setTaxSlabs] = useState([]);
+  const [leaveTypes, setLeaveTypes] = useState([]);
+  const [salaryComponents, setSalaryComponents] = useState([]);
+  const [dialog, setDialog] = useState(defaultDialog);
+  const [dialogForm, setDialogForm] = useState({});
 
-  const mId = (i) => `550e8400-e29b-41d4-a716-44665544${String(i).padStart(4, '0')}`;
+  useEffect(() => {
+    Promise.all([
+      settingsService.getCompany(),
+      settingsService.getTaxSlabs(),
+      settingsService.getLeaveTypes(),
+      salaryService.getComponents()
+    ]).then(([comp, slabs, leaves, components]) => {
+      if (comp.data) setCompany(comp.data);
+      setTaxSlabs(slabs.data || []);
+      setLeaveTypes(leaves.data || []);
+      setSalaryComponents(components.data || []);
+    }).catch(() => toast.error('Failed to load settings'))
+    .finally(() => setLoading(false));
+  }, []);
 
-  const taxSlabs = [
-    { id: mId(1), from: 0, to: 250000, rate: 0, name: 'Nil Slab' },
-    { id: mId(2), from: 250001, to: 500000, rate: 5, name: '5% Slab' },
-    { id: mId(3), from: 500001, to: 1000000, rate: 20, name: '20% Slab' },
-    { id: mId(4), from: 1000001, to: null, rate: 30, name: '30% Slab' },
-  ];
-
-  const leaveTypes = [
-    { id: mId(1), name: 'Annual Leave', days: 18, paid: true },
-    { id: mId(2), name: 'Sick Leave', days: 12, paid: true },
-    { id: mId(3), name: 'Casual Leave', days: 10, paid: true },
-    { id: mId(4), name: 'Maternity Leave', days: 180, paid: true },
-    { id: mId(5), name: 'Loss of Pay', days: null, paid: false },
-  ];
-
-  const salaryComponents = [
-    { id: mId(1), name: 'Basic Salary', type: 'Earning', variable: false },
-    { id: mId(2), name: 'House Rent Allowance', type: 'Earning', variable: false },
-    { id: mId(3), name: 'Dearness Allowance', type: 'Earning', variable: false },
-    { id: mId(4), name: 'Performance Bonus', type: 'Earning', variable: true },
-    { id: mId(5), name: 'Provident Fund', type: 'Deduction', variable: false },
-    { id: mId(6), name: 'Professional Tax', type: 'Deduction', variable: false },
-    { id: mId(7), name: 'Income Tax', type: 'Deduction', variable: false },
-  ];
-
-  const handleCompanySave = () => {
-    toast.success('Company settings updated successfully');
+  const handleCompanySave = async () => {
+    setSaving(true);
+    try {
+      const res = await settingsService.updateCompany(company);
+      setCompany(res.data);
+      toast.success('Company settings saved');
+    } catch { toast.error('Failed to save company settings'); }
+    finally { setSaving(false); }
   };
+
+  const openDialog = (type, item = null) => {
+    setDialog({ open: true, type, editItem: item });
+    if (item) setDialogForm({ ...item });
+    else setDialogForm({});
+  };
+
+  const handleDialogSave = async () => {
+    try {
+      if (dialog.type === 'tax-slab') {
+        if (dialog.editItem) {
+          toast.info('Edit tax slab coming soon');
+        } else {
+          const res = await settingsService.createTaxSlab({
+            name: dialogForm.name,
+            fromAmount: Number(dialogForm.fromAmount),
+            toAmount: dialogForm.toAmount ? Number(dialogForm.toAmount) : null,
+            rate: Number(dialogForm.rate)
+          });
+          setTaxSlabs(prev => [...prev, res.data]);
+          toast.success('Tax slab created');
+        }
+      } else if (dialog.type === 'leave-type') {
+        if (dialog.editItem) {
+          toast.info('Edit leave type coming soon');
+        } else {
+          const res = await settingsService.createLeaveType({
+            name: dialogForm.name,
+            daysPerYear: dialogForm.daysPerYear ? Number(dialogForm.daysPerYear) : null,
+            isPaid: dialogForm.isPaid !== false
+          });
+          setLeaveTypes(prev => [...prev, res.data]);
+          toast.success('Leave type created');
+        }
+      } else if (dialog.type === 'salary-component') {
+        if (dialog.editItem) {
+          const res = await salaryService.updateComponent(dialog.editItem.id, {
+            name: dialogForm.name,
+            type: dialogForm.type,
+            isVariable: dialogForm.isVariable || false,
+            description: dialogForm.description
+          });
+          setSalaryComponents(prev => prev.map(c => c.id === res.data.id ? res.data : c));
+          toast.success('Component updated');
+        } else {
+          const res = await salaryService.createComponent({
+            name: dialogForm.name,
+            type: dialogForm.type || 'Earning',
+            isVariable: dialogForm.isVariable || false,
+            description: dialogForm.description
+          });
+          setSalaryComponents(prev => [...prev, res.data]);
+          toast.success('Component created');
+        }
+      }
+      setDialog(defaultDialog);
+    } catch { toast.error('Operation failed'); }
+  };
+
+  if (loading) return <LoadingSpinner message="Loading settings..." />;
 
   return (
     <>
@@ -76,26 +139,34 @@ export const Settings = () => {
             <Divider sx={{ mb: 3 }} />
             <Grid container spacing={2.5}>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField fullWidth label="Company Name" value={company.name} onChange={(e) => setCompany({ ...company, name: e.target.value })} />
+                <TextField fullWidth label="Company Name" value={company.companyName || ''}
+                  onChange={(e) => setCompany({ ...company, companyName: e.target.value })} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField fullWidth label="Email" value={company.email} onChange={(e) => setCompany({ ...company, email: e.target.value })} />
+                <TextField fullWidth label="Email" value={company.email || ''}
+                  onChange={(e) => setCompany({ ...company, email: e.target.value })} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField fullWidth label="Phone" value={company.phone} onChange={(e) => setCompany({ ...company, phone: e.target.value })} />
+                <TextField fullWidth label="Phone" value={company.phone || ''}
+                  onChange={(e) => setCompany({ ...company, phone: e.target.value })} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField fullWidth label="GSTIN" value={company.gstin} onChange={(e) => setCompany({ ...company, gstin: e.target.value })} />
+                <TextField fullWidth label="GSTIN" value={company.gstin || ''}
+                  onChange={(e) => setCompany({ ...company, gstin: e.target.value })} />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField fullWidth label="PAN" value={company.pan} onChange={(e) => setCompany({ ...company, pan: e.target.value })} />
+                <TextField fullWidth label="PAN" value={company.pan || ''}
+                  onChange={(e) => setCompany({ ...company, pan: e.target.value })} />
               </Grid>
               <Grid size={{ xs: 12 }}>
-                <TextField fullWidth label="Address" multiline rows={2} value={company.address} onChange={(e) => setCompany({ ...company, address: e.target.value })} />
+                <TextField fullWidth label="Address" multiline rows={2} value={company.address || ''}
+                  onChange={(e) => setCompany({ ...company, address: e.target.value })} />
               </Grid>
             </Grid>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 3 }}>
-              <Button variant="contained" startIcon={<Save />} onClick={handleCompanySave}>Save Changes</Button>
+              <Button variant="contained" startIcon={<Save />} onClick={handleCompanySave} disabled={saving}>
+                {saving ? 'Saving...' : 'Save Changes'}
+              </Button>
             </Box>
           </CardContent>
         </Card>
@@ -106,7 +177,8 @@ export const Settings = () => {
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Typography variant="h6" fontWeight={600}>Tax Slabs</Typography>
-              <Button variant="contained" size="small" startIcon={<Add />}>Add Slab</Button>
+              <Button variant="contained" size="small" startIcon={<Add />}
+                onClick={() => openDialog('tax-slab')}>Add Slab</Button>
             </Box>
             <Divider sx={{ mb: 2 }} />
             <List>
@@ -114,12 +186,13 @@ export const Settings = () => {
                 <ListItem key={slab.id} divider>
                   <ListItemText
                     primary={slab.name}
-                    secondary={`₹${slab.from?.toLocaleString() || 0} - ${slab.to ? `₹${slab.to.toLocaleString()}` : 'Above'} @ ${slab.rate}%`}
+                    secondary={`₹${(slab.fromAmount || 0).toLocaleString()} - ${slab.toAmount ? `₹${slab.toAmount.toLocaleString()}` : 'Above'} @ ${slab.rate}%`}
                   />
-                  <IconButton size="small"><Edit fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error"><Delete fontSize="small" /></IconButton>
                 </ListItem>
               ))}
+              {taxSlabs.length === 0 && (
+                <ListItem><ListItemText primary="No tax slabs configured" /></ListItem>
+              )}
             </List>
           </CardContent>
         </Card>
@@ -130,7 +203,8 @@ export const Settings = () => {
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Typography variant="h6" fontWeight={600}>Leave Types</Typography>
-              <Button variant="contained" size="small" startIcon={<Add />}>Add Leave Type</Button>
+              <Button variant="contained" size="small" startIcon={<Add />}
+                onClick={() => openDialog('leave-type')}>Add Leave Type</Button>
             </Box>
             <Divider sx={{ mb: 2 }} />
             <List>
@@ -138,13 +212,14 @@ export const Settings = () => {
                 <ListItem key={leave.id} divider>
                   <ListItemText
                     primary={leave.name}
-                    secondary={`${leave.days || 'Unlimited'} days per year - ${leave.paid ? 'Paid' : 'Unpaid'}`}
+                    secondary={`${leave.daysPerYear || 'Unlimited'} days per year`}
                   />
-                  <Chip label={leave.paid ? 'Paid' : 'Unpaid'} color={leave.paid ? 'success' : 'default'} size="small" sx={{ mr: 1 }} />
-                  <IconButton size="small"><Edit fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error"><Delete fontSize="small" /></IconButton>
+                  <Chip label={leave.isPaid ? 'Paid' : 'Unpaid'} color={leave.isPaid ? 'success' : 'default'} size="small" sx={{ mr: 1 }} />
                 </ListItem>
               ))}
+              {leaveTypes.length === 0 && (
+                <ListItem><ListItemText primary="No leave types configured" /></ListItem>
+              )}
             </List>
           </CardContent>
         </Card>
@@ -155,25 +230,94 @@ export const Settings = () => {
           <CardContent>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Typography variant="h6" fontWeight={600}>Salary Components</Typography>
-              <Button variant="contained" size="small" startIcon={<Add />}>Add Component</Button>
+              <Button variant="contained" size="small" startIcon={<Add />}
+                onClick={() => openDialog('salary-component')}>Add Component</Button>
             </Box>
             <Divider sx={{ mb: 2 }} />
             <List>
               {salaryComponents.map(comp => (
-                <ListItem key={comp.id} divider>
+                <ListItem key={comp.id} divider
+                  secondaryAction={
+                    <IconButton edge="end" size="small" onClick={() => openDialog('salary-component', comp)}>
+                      <Edit fontSize="small" />
+                    </IconButton>
+                  }>
                   <ListItemText
                     primary={comp.name}
-                    secondary={`Type: ${comp.type} | ${comp.variable ? 'Variable' : 'Fixed'}`}
+                    secondary={`Type: ${comp.type} | ${comp.isVariable ? 'Variable' : 'Fixed'}`}
                   />
-                  <Chip label={comp.type} color={comp.type === 'Earning' ? 'success' : 'error'} size="small" sx={{ mr: 1 }} />
-                  <IconButton size="small"><Edit fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error"><Delete fontSize="small" /></IconButton>
+                  <Chip label={comp.type} color={comp.type === 'Earning' ? 'success' : 'error'} size="small" sx={{ mr: 4 }} />
                 </ListItem>
               ))}
+              {salaryComponents.length === 0 && (
+                <ListItem><ListItemText primary="No salary components configured" /></ListItem>
+              )}
             </List>
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={dialog.open} onClose={() => setDialog(defaultDialog)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {dialog.editItem ? 'Edit' : 'Add'} {
+            dialog.type === 'tax-slab' ? 'Tax Slab' :
+            dialog.type === 'leave-type' ? 'Leave Type' : 'Salary Component'
+          }
+          <IconButton onClick={() => setDialog(defaultDialog)} sx={{ position: 'absolute', right: 8, top: 8 }}>
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {dialog.type === 'tax-slab' && (
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              <Grid size={{ xs: 12 }}><TextField fullWidth label="Name" value={dialogForm.name || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, name: e.target.value })} /></Grid>
+              <Grid size={{ xs: 6 }}><TextField fullWidth label="From Amount (₹)" type="number" value={dialogForm.fromAmount || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, fromAmount: e.target.value })} /></Grid>
+              <Grid size={{ xs: 6 }}><TextField fullWidth label="To Amount (₹)" type="number" value={dialogForm.toAmount || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, toAmount: e.target.value })} /></Grid>
+              <Grid size={{ xs: 12 }}><TextField fullWidth label="Rate (%)" type="number" value={dialogForm.rate || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, rate: e.target.value })} /></Grid>
+            </Grid>
+          )}
+          {dialog.type === 'leave-type' && (
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              <Grid size={{ xs: 12 }}><TextField fullWidth label="Leave Type Name" value={dialogForm.name || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, name: e.target.value })} /></Grid>
+              <Grid size={{ xs: 6 }}><TextField fullWidth label="Days Per Year" type="number" value={dialogForm.daysPerYear || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, daysPerYear: e.target.value })} /></Grid>
+              <Grid size={{ xs: 6 }}>
+                <FormControlLabel control={<Switch checked={dialogForm.isPaid !== false}
+                  onChange={(e) => setDialogForm({ ...dialogForm, isPaid: e.target.checked })} />} label="Paid Leave" />
+              </Grid>
+            </Grid>
+          )}
+          {dialog.type === 'salary-component' && (
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              <Grid size={{ xs: 12 }}><TextField fullWidth label="Component Name" value={dialogForm.name || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, name: e.target.value })} /></Grid>
+              <Grid size={{ xs: 6 }}>
+                <TextField select fullWidth label="Type" value={dialogForm.type || 'Earning'}
+                  onChange={(e) => setDialogForm({ ...dialogForm, type: e.target.value })}
+                  slotProps={{ native: true }}>
+                  <option value="Earning">Earning</option>
+                  <option value="Deduction">Deduction</option>
+                </TextField>
+              </Grid>
+              <Grid size={{ xs: 6 }}>
+                <FormControlLabel control={<Switch checked={dialogForm.isVariable || false}
+                  onChange={(e) => setDialogForm({ ...dialogForm, isVariable: e.target.checked })} />} label="Variable" />
+              </Grid>
+              <Grid size={{ xs: 12 }}><TextField fullWidth label="Description" multiline rows={2} value={dialogForm.description || ''}
+                onChange={(e) => setDialogForm({ ...dialogForm, description: e.target.value })} /></Grid>
+            </Grid>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialog(defaultDialog)}>Cancel</Button>
+          <Button variant="contained" onClick={handleDialogSave}>Save</Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

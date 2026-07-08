@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Services;
 
@@ -10,10 +12,12 @@ namespace PayrollApi.Controllers;
 public class PayrollController : BaseApiController
 {
     private readonly IPayrollService _payrollService;
+    private readonly PayrollDbContext _context;
 
-    public PayrollController(IPayrollService payrollService)
+    public PayrollController(IPayrollService payrollService, PayrollDbContext context)
     {
         _payrollService = payrollService;
+        _context = context;
     }
 
     [HttpGet]
@@ -102,6 +106,32 @@ public class PayrollController : BaseApiController
         return Ok(result);
     }
 
+    [HttpPut("month/{month}/year/{year}/lock")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult> LockPayrollMonth(int month, int year)
+    {
+        var payrollMonth = await _context.PayrollMonths
+            .FirstOrDefaultAsync(pm => pm.Month == month && pm.Year == year);
+        if (payrollMonth == null)
+            return NotFound(new { message = "Payroll period not found" });
+        payrollMonth.IsLocked = true;
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Payroll month locked" });
+    }
+
+    [HttpPut("month/{month}/year/{year}/unlock")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult> UnlockPayrollMonth(int month, int year)
+    {
+        var payrollMonth = await _context.PayrollMonths
+            .FirstOrDefaultAsync(pm => pm.Month == month && pm.Year == year);
+        if (payrollMonth == null)
+            return NotFound(new { message = "Payroll period not found" });
+        payrollMonth.IsLocked = false;
+        await _context.SaveChangesAsync();
+        return Ok(new { message = "Payroll month unlocked" });
+    }
+
     [HttpGet("export/csv")]
     public async Task<ActionResult> ExportCsv(
         [FromQuery] int? month, [FromQuery] int? year, [FromQuery] string? status)
@@ -116,7 +146,7 @@ public class PayrollController : BaseApiController
         try
         {
             var data = await _payrollService.ExportPdfAsync(id);
-            return File(data, "text/html", $"salary_slip_{id}.html");
+            return File(data, "application/pdf", $"salary_slip_{id}.pdf");
         }
         catch (KeyNotFoundException ex)
         {

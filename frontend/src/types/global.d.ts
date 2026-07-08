@@ -56,3 +56,29 @@ interface User {
   lastName: string;
   role: 'Admin' | 'HRManager' | 'Employee';
 }
+
+interface EmployeeState {
+  items: any[];
+  selected: any | null;
+  total: number;
+  page: number;
+  pageSize: number;
+  loading: boolean;
+  error: string | null;
+}
+
+interface PayrollState {
+  items: any[];
+  selected: any | null;
+  total: number;
+  loading: boolean;
+  processing: boolean;
+  error: string | null;
+}
+
+interface AppState {
+  auth: AuthState;
+  ui: UIState;
+  employee: EmployeeState;
+  payroll: PayrollState;
+}

@@ -7,7 +7,7 @@ using PayrollApi.Services;
 namespace PayrollApi.Controllers;
 
 [Route("api/v1/employees")]
-[Authorize(Roles = "Admin,HRManager")]
+[Authorize]
 public class EmployeesController : BaseApiController
 {
     private readonly IEmployeeService _employeeService;
@@ -18,6 +18,7 @@ public class EmployeesController : BaseApiController
     }
 
     [HttpGet]
+    [Authorize(Roles = "Admin,HRManager")]
     public async Task<ActionResult<EmployeeListResponse>> GetAll(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
@@ -29,7 +30,22 @@ public class EmployeesController : BaseApiController
         return Ok(result);
     }
 
+    [HttpGet("me")]
+    public async Task<ActionResult<EmployeeDto>> GetCurrentEmployee()
+    {
+        try
+        {
+            var result = await _employeeService.GetByUserIdAsync(CurrentUserId);
+            return Ok(result);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+    }
+
     [HttpGet("{id}")]
+    [Authorize(Roles = "Admin,HRManager")]
     public async Task<ActionResult<EmployeeDto>> GetById(Guid id)
     {
         try
@@ -44,6 +60,7 @@ public class EmployeesController : BaseApiController
     }
 
     [HttpPost]
+    [Authorize(Roles = "Admin,HRManager")]
     public async Task<ActionResult<EmployeeDto>> Create([FromBody] CreateEmployeeRequest request)
     {
         var result = await _employeeService.CreateAsync(request);
@@ -51,6 +68,7 @@ public class EmployeesController : BaseApiController
     }
 
     [HttpPut("{id}")]
+    [Authorize(Roles = "Admin,HRManager")]
     public async Task<ActionResult<EmployeeDto>> Update(Guid id, [FromBody] UpdateEmployeeRequest request)
     {
         try
@@ -65,6 +83,7 @@ public class EmployeesController : BaseApiController
     }
 
     [HttpDelete("{id}")]
+    [Authorize(Roles = "Admin,HRManager")]
     public async Task<ActionResult> Delete(Guid id)
     {
         try
@@ -79,6 +98,7 @@ public class EmployeesController : BaseApiController
     }
 
     [HttpGet("search")]
+    [Authorize(Roles = "Admin,HRManager")]
     public async Task<ActionResult<EmployeeListResponse>> Search([FromQuery] string query)
     {
         var result = await _employeeService.SearchAsync(query);

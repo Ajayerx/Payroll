@@ -1,11 +1,14 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using PayrollApi.Constants;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Services;
 
 namespace PayrollApi.Controllers;
 
 [Route("api/v1/auth")]
+[EnableRateLimiting("Auth")]
 public class AuthController : BaseApiController
 {
     private readonly IAuthService _authService;
@@ -30,6 +33,7 @@ public class AuthController : BaseApiController
     }
 
     [HttpPost("register")]
+    [Authorize(Roles = "Admin")]
     public async Task<ActionResult<AuthResponse>> Register([FromBody] RegisterRequest request)
     {
         try
@@ -85,5 +89,19 @@ public class AuthController : BaseApiController
     {
         await _authService.ForgotPasswordAsync(request);
         return Ok(new { message = "If the email exists, a reset link has been sent" });
+    }
+
+    [HttpPost("reset-password")]
+    public async Task<ActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        try
+        {
+            await _authService.ResetPasswordAsync(request);
+            return Ok(new { message = "Password has been reset successfully" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 }

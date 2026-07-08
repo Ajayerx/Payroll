@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import {
   Box, TextField, Button, MenuItem, IconButton, Tooltip,
   Grid, Dialog, DialogTitle,
-  DialogContent, DialogContentText, DialogActions
+  DialogContent, DialogContentText, DialogActions, ToggleButtonGroup, ToggleButton
 } from '@mui/material';
 import {
-  Add, CheckCircle, Cancel, Visibility
+  Add, CheckCircle, Cancel, Visibility, CalendarMonth, TableRows
 } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { PageHeader } from '../Common/PageHeader';
@@ -19,6 +19,8 @@ import { formatDate } from '../../utils/formatters';
 import { useAuth } from '../../hooks/useAuth';
 import { ROLES } from '../../constants';
 import { leaveService } from '../../services/leaveService';
+import { employeeService } from '../../services/employeeService';
+import { LeaveCalendar } from './LeaveCalendar';
 
 export const LeaveList = () => {
   const navigate = useNavigate();
@@ -32,14 +34,27 @@ export const LeaveList = () => {
   const [typeFilter, setTypeFilter] = useState('');
   const [actionDialog, setActionDialog] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [viewMode, setViewMode] = useState('list');
+  const [employeeId, setEmployeeId] = useState(null);
   const isAdmin = hasRole(ROLES.ADMIN, ROLES.HR_MANAGER);
 
   useEffect(() => {
+    if (!isAdmin && !employeeId) {
+      employeeService.getCurrentEmployee()
+        .then(res => setEmployeeId(res.data.id))
+        .catch(() => {});
+    } else if (isAdmin) {
+      setEmployeeId(null);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin && !employeeId) return;
     setLoading(true);
     const params = { status: statusFilter || undefined, type: typeFilter || undefined, page: page + 1, pageSize: rowsPerPage };
     const fetcher = isAdmin
       ? leaveService.getAll(params)
-      : leaveService.getByEmployee(user?.employeeId, { status: statusFilter || undefined });
+      : leaveService.getByEmployee(employeeId, { status: statusFilter || undefined });
     fetcher
       .then(res => {
         const data = res.data.items || res.data || [];
@@ -48,7 +63,7 @@ export const LeaveList = () => {
       })
       .catch(() => toast.error('Failed to fetch leave requests'))
       .finally(() => setLoading(false));
-  }, [isAdmin, statusFilter, typeFilter, page, rowsPerPage, user?.employeeId, refreshTrigger]);
+  }, [isAdmin, statusFilter, typeFilter, page, rowsPerPage, employeeId, refreshTrigger]);
 
   const handleApprove = async (id) => {
     try {
@@ -126,7 +141,7 @@ export const LeaveList = () => {
         </Grid>
       </Grid>
 
-      <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', gap: 2, mb: 3, flexWrap: 'wrap', alignItems: 'center' }}>
         <TextField select size="small" label="Status" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }} sx={{ minWidth: 150 }}>
           <MenuItem value="">All</MenuItem>
           <MenuItem value="Pending">Pending</MenuItem>
@@ -140,10 +155,17 @@ export const LeaveList = () => {
           <MenuItem value="Casual Leave">Casual Leave</MenuItem>
           <MenuItem value="Maternity Leave">Maternity Leave</MenuItem>
         </TextField>
+        <Box sx={{ flexGrow: 1 }} />
+        <ToggleButtonGroup value={viewMode} exclusive onChange={(_, v) => v && setViewMode(v)} size="small">
+          <ToggleButton value="list"><TableRows fontSize="small" /> List</ToggleButton>
+          <ToggleButton value="calendar"><CalendarMonth fontSize="small" /> Calendar</ToggleButton>
+        </ToggleButtonGroup>
       </Box>
 
       {loading ? (
         <TableSkeleton />
+      ) : viewMode === 'calendar' ? (
+        <LeaveCalendar leaves={leaves} />
       ) : leaves.length === 0 ? (
         <EmptyState title="No leave requests" actionLabel="Apply for Leave" onAction={() => navigate('/leaves/new')} />
       ) : (

@@ -10,4 +10,5 @@ public interface IAuthService
     Task LogoutAsync(Guid userId);
     Task ChangePasswordAsync(Guid userId, ChangePasswordRequest request);
     Task ForgotPasswordAsync(ForgotPasswordRequest request);
+    Task ResetPasswordAsync(ResetPasswordRequest request);
 }

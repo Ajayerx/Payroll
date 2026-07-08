@@ -118,7 +118,7 @@ export const Reports = () => {
     setExporting(true);
     try {
       const res = await reportService.exportReport({ month, year, reportType: tab }, format);
-      downloadFile(res.data, `payroll_report_${month}_${year}.${format === 'pdf' ? 'html' : format === 'excel' ? 'xls' : 'csv'}`);
+      downloadFile(res.data, `payroll_report_${month}_${year}.${format === 'pdf' ? 'pdf' : format === 'excel' ? 'xlsx' : 'csv'}`);
       toast.success(`Report exported as ${format.toUpperCase()}`);
     } catch {
       toast.error('Failed to export report');

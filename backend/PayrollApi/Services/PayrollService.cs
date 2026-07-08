@@ -1,9 +1,14 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using PayrollApi.Constants;
 using PayrollApi.Data;
 using PayrollApi.Models.DTOs;
 using PayrollApi.Models.Entities;
 using PayrollApi.Models.Enums;
+using PayrollApi.Services.Interfaces;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace PayrollApi.Services;
 
@@ -11,12 +16,22 @@ public class PayrollService : IPayrollService
 {
     private readonly PayrollDbContext _context;
     private readonly ISalaryCalculationService _salaryCalculation;
+    private readonly IAuditService _auditService;
+    private readonly INotificationService _notificationService;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public PayrollService(PayrollDbContext context, ISalaryCalculationService salaryCalculation)
+    public PayrollService(PayrollDbContext context, ISalaryCalculationService salaryCalculation,
+        IAuditService auditService, INotificationService notificationService, IHttpContextAccessor httpContextAccessor)
     {
         _context = context;
         _salaryCalculation = salaryCalculation;
+        _auditService = auditService;
+        _notificationService = notificationService;
+        _httpContextAccessor = httpContextAccessor;
     }
+
+    private Guid CurrentUserId =>
+        Guid.TryParse(_httpContextAccessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
 
     public async Task<PayrollListResponse> GetAllAsync(int? month, int? year, string? status, int page, int pageSize)
     {
@@ -188,6 +203,19 @@ public class PayrollService : IPayrollService
 
         await _context.SaveChangesAsync();
 
+        foreach (var empId in request.EmployeeIds)
+        {
+            await _notificationService.CreateAndSendAsync(empId, new Models.DTOs.CreateNotificationRequest
+            {
+                Title = "Payroll Processed",
+                Message = $"Your payroll for {request.Month}/{request.Year} has been processed.",
+                Link = "/my-salary"
+            });
+        }
+
+        await _auditService.LogAsync(EntityNames.Payroll, $"{request.Month}/{request.Year}", "Process",
+            null, new { request.EmployeeIds, request.Month, request.Year }, CurrentUserId, null);
+
         return lastDto ?? new PayrollDto { Status = PayrollStatus.Draft.ToString() };
     }
 
@@ -203,6 +231,9 @@ public class PayrollService : IPayrollService
 
         payroll.NetSalary = payroll.GrossSalary - payroll.TaxDeduction - payroll.OtherDeductions;
         await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(EntityNames.Payroll, id.ToString(), "Update", null,
+            new { payroll.TaxDeduction, payroll.OtherDeductions, payroll.NetSalary, payroll.Status }, CurrentUserId, null);
 
         return await GetByIdAsync(id);
     }
@@ -224,39 +255,86 @@ public class PayrollService : IPayrollService
             .Where(d => d.SalaryComponent.Type == SalaryComponentType.Deduction)
             .ToList();
 
-        var earningsRows = string.Join("", earnings.Select(e =>
-            $"<tr><td style='padding:6px 12px;border:1px solid #ddd'>{e.SalaryComponent.Name}</td><td style='padding:6px 12px;border:1px solid #ddd;text-align:right'>{e.Amount:N2}</td></tr>"));
-        var deductionRows = string.Join("", deductions.Select(d =>
-            $"<tr><td style='padding:6px 12px;border:1px solid #ddd'>{d.SalaryComponent.Name}</td><td style='padding:6px 12px;border:1px solid #ddd;text-align:right'>({d.Amount:N2})</td></tr>"));
+        return Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(35);
+                page.DefaultTextStyle(style => style.FontSize(10).FontFamily("Arial"));
 
-        var html = $@"<!DOCTYPE html>
-<html><head><meta charset='utf-8'><title>Salary Slip</title></head><body>
-<div style='max-width:700px;margin:30px auto;font-family:Arial,sans-serif;border:2px solid #1a237e;border-radius:8px;padding:30px'>
-<div style='text-align:center;border-bottom:2px solid #1a237e;padding-bottom:20px;margin-bottom:20px'>
-<h1 style='color:#1a237e;margin:0;font-size:24px'>PAYROLL SOLUTIONS INC.</h1>
-<p style='color:#666;margin:5px 0 0'>Salary Slip for {payroll.PayrollMonth.Month}/{payroll.PayrollMonth.Year}</p>
-</div>
-<table style='width:100%;border-collapse:collapse;margin-bottom:20px'>
-<tr><td style='padding:4px 8px;color:#666;width:120px'>Employee</td><td style='padding:4px 8px;font-weight:600'>{payroll.Employee.FirstName} {payroll.Employee.LastName}</td></tr>
-<tr><td style='padding:4px 8px;color:#666'>Code</td><td style='padding:4px 8px'>{payroll.Employee.EmployeeCode}</td></tr>
-<tr><td style='padding:4px 8px;color:#666'>Department</td><td style='padding:4px 8px'>{payroll.Employee.Department}</td></tr>
-<tr><td style='padding:4px 8px;color:#666'>Status</td><td style='padding:4px 8px'>{payroll.Status}</td></tr>
-</table>
-<table style='width:100%;border-collapse:collapse;margin-bottom:15px'>
-<tr style='background:#1a237e;color:#fff'><th style='padding:8px 12px;text-align:left'>Component</th><th style='padding:8px 12px;text-align:right'>Amount</th></tr>
-{earningsRows}
-<tr style='background:#f5f5f5'><td style='padding:8px 12px;border:1px solid #ddd;font-weight:600'>Gross Salary</td><td style='padding:8px 12px;border:1px solid #ddd;text-align:right;font-weight:600'>{payroll.GrossSalary:N2}</td></tr>
-{deductionRows}
-<tr style='background:#f5f5f5'><td style='padding:8px 12px;border:1px solid #ddd;font-weight:600'>Tax Deduction</td><td style='padding:8px 12px;border:1px solid #ddd;text-align:right;color:#d32f2f'>({payroll.TaxDeduction:N2})</td></tr>
-</table>
-<div style='background:#e8f5e9;padding:12px 20px;border-radius:6px;text-align:center'>
-<span style='color:#333;font-size:14px'>Net Payable</span>
-<span style='color:#1a237e;font-size:22px;font-weight:700;margin-left:15px'>&#8377; {payroll.NetSalary:N2}</span>
-</div>
-<p style='text-align:center;color:#999;font-size:11px;margin-top:25px'>This is a computer-generated document</p>
-</div></body></html>";
+                page.Header().Element(c => c.Column(col =>
+                {
+                    col.Item().AlignCenter().Text("PAYROLL SOLUTIONS INC.")
+                        .FontSize(18).Bold().FontColor(Colors.Blue.Darken4);
+                    col.Item().AlignCenter().Text($"Salary Slip for {payroll.PayrollMonth.Month}/{payroll.PayrollMonth.Year}")
+                        .FontSize(11).FontColor(Colors.Grey.Darken2);
+                    col.Item().LineHorizontal(2).LineColor(Colors.Blue.Darken4);
+                }));
 
-        return Encoding.UTF8.GetBytes(html);
+                page.Content().Element(c => c.Column(col =>
+                {
+                    col.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(cols =>
+                        {
+                            cols.RelativeColumn();
+                            cols.RelativeColumn(2);
+                        });
+                        table.Cell().Text("Employee:").Bold().FontColor(Colors.Grey.Darken2);
+                        table.Cell().Text($"{payroll.Employee.FirstName} {payroll.Employee.LastName}");
+                        table.Cell().Text("Code:").Bold().FontColor(Colors.Grey.Darken2);
+                        table.Cell().Text(payroll.Employee.EmployeeCode);
+                        table.Cell().Text("Department:").Bold().FontColor(Colors.Grey.Darken2);
+                        table.Cell().Text(payroll.Employee.Department ?? "");
+                        table.Cell().Text("Status:").Bold().FontColor(Colors.Grey.Darken2);
+                        table.Cell().Text(payroll.Status.ToString());
+                    });
+
+                    col.Item().PaddingVertical(10).Table(table =>
+                    {
+                        table.ColumnsDefinition(cols =>
+                        {
+                            cols.RelativeColumn(3);
+                            cols.RelativeColumn(1);
+                        });
+
+                        table.Header(header =>
+                        {
+                            header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Component").FontColor(Colors.White).Bold();
+                            header.Cell().Background(Colors.Blue.Darken4).Padding(6).Text("Amount").FontColor(Colors.White).Bold().AlignRight();
+                        });
+
+                        foreach (var e in earnings)
+                        {
+                            table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(e.SalaryComponent.Name);
+                            table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text($"{e.Amount:N2}").AlignRight();
+                        }
+
+                        table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Gross Salary").Bold();
+                        table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text($"{payroll.GrossSalary:N2}").AlignRight().Bold();
+
+                        foreach (var d in deductions)
+                        {
+                            table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(d.SalaryComponent.Name);
+                            table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text($"({d.Amount:N2})").AlignRight().FontColor(Colors.Red.Darken2);
+                        }
+
+                        table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Tax Deduction").Bold();
+                        table.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text($"({payroll.TaxDeduction:N2})").AlignRight().FontColor(Colors.Red.Darken2);
+                    });
+
+                    col.Item().Background(Colors.Green.Lighten4).Padding(12).AlignCenter().Row(row =>
+                    {
+                        row.AutoItem().Text("Net Payable: ").FontSize(12).Bold();
+                        row.AutoItem().Text($"₹ {payroll.NetSalary:N2}").FontSize(16).Bold().FontColor(Colors.Blue.Darken4);
+                    });
+                }));
+
+                page.Footer().AlignCenter().Text("This is a computer-generated document")
+                    .FontSize(9).FontColor(Colors.Grey.Darken2);
+            });
+        }).GeneratePdf();
     }
 
     public async Task<byte[]> ExportCsvAsync(int? month, int? year, string? status)
@@ -321,18 +399,90 @@ public class PayrollService : IPayrollService
 
     public async Task<List<PayrollDto>> BulkProcessAsync(BulkProcessPayrollRequest request)
     {
+        var payrollMonth = await _context.PayrollMonths
+            .FirstOrDefaultAsync(pm => pm.Month == request.Month && pm.Year == request.Year)
+            ?? throw new InvalidOperationException($"Payroll period {request.Month}/{request.Year} not found");
+
+        var employees = await _context.Employees
+            .Where(e => request.EmployeeIds.Contains(e.Id) && e.IsActive && !e.IsDeleted)
+            .ToListAsync();
+
+        var existingPayrolls = await _context.Payrolls
+            .Where(p => request.EmployeeIds.Contains(p.EmployeeId) && p.PayrollMonthId == payrollMonth.Id)
+            .ToDictionaryAsync(p => p.EmployeeId);
+
         var result = new List<PayrollDto>();
 
-        foreach (var empId in request.EmployeeIds)
+        foreach (var employee in employees)
         {
-            var payrollDto = await ProcessAsync(new ProcessPayrollRequest
+            var breakdown = await _salaryCalculation.CalculateAsync(employee.Id, request.Month, request.Year);
+            var existingPayroll = existingPayrolls.GetValueOrDefault(employee.Id);
+
+            var payroll = new Payroll
             {
-                EmployeeIds = [empId],
-                Month = request.Month,
-                Year = request.Year
+                EmployeeId = employee.Id,
+                PayrollMonthId = payrollMonth.Id,
+                GrossSalary = breakdown.GrossEarnings,
+                TaxDeduction = breakdown.Deductions.Where(d => d.ComponentName.Contains("Tax")).Sum(d => d.Amount),
+                OtherDeductions = breakdown.TotalDeductions - breakdown.Deductions.Where(d => d.ComponentName.Contains("Tax")).Sum(d => d.Amount),
+                NetSalary = breakdown.NetSalary,
+                Status = PayrollStatus.Draft,
+                CreatedDate = DateTime.UtcNow
+            };
+
+            _context.Payrolls.Add(payroll);
+            await _context.SaveChangesAsync();
+
+            foreach (var component in breakdown.Earnings.Concat(breakdown.Deductions))
+            {
+                var salaryComponent = await _context.SalaryComponents
+                    .FirstOrDefaultAsync(sc => sc.Name == component.ComponentName);
+                if (salaryComponent == null) continue;
+
+                _context.PayrollDetails.Add(new PayrollDetail
+                {
+                    PayrollId = payroll.Id,
+                    SalaryComponentId = salaryComponent.Id,
+                    Amount = component.Amount
+                });
+            }
+
+            result.Add(new PayrollDto
+            {
+                Id = payroll.Id,
+                EmployeeId = employee.Id,
+                EmployeeCode = employee.EmployeeCode,
+                EmployeeName = $"{employee.FirstName} {employee.LastName}",
+                Department = employee.Department ?? "",
+                Month = payrollMonth.Month,
+                Year = payrollMonth.Year,
+                GrossSalary = payroll.GrossSalary,
+                TaxDeduction = payroll.TaxDeduction,
+                OtherDeductions = payroll.OtherDeductions,
+                NetSalary = payroll.NetSalary,
+                Status = PayrollStatus.Draft.ToString(),
+                ProcessedDate = null
             });
-            result.Add(payrollDto);
         }
+
+        await _context.SaveChangesAsync();
+
+        var firstDto = result.FirstOrDefault();
+        if (firstDto != null)
+        {
+            foreach (var employee in employees)
+            {
+                await _notificationService.CreateAndSendAsync(employee.UserId, new CreateNotificationRequest
+                {
+                    Title = "Payroll Processed",
+                    Message = $"Your payroll for {request.Month}/{request.Year} has been processed.",
+                    Link = "/my-salary"
+                });
+            }
+        }
+
+        await _auditService.LogAsync(EntityNames.Payroll, $"{request.Month}/{request.Year}", "BulkProcess",
+            null, new { request.EmployeeIds, request.Month, request.Year }, CurrentUserId, null);
 
         return result;
     }
